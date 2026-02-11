@@ -30,6 +30,7 @@ export default function Home() {
                     const filtered = parsed.filter(item =>
                         item.url && (
                             item.url.startsWith("/") ||
+                            item.url.startsWith("data:") ||
                             item.url.includes("threejs.org") ||
                             item.url.includes("polyhaven.org")
                         )
@@ -45,7 +46,19 @@ export default function Home() {
 
     useEffect(() => {
         if (history.length > 0) {
-            localStorage.setItem("pano-history", JSON.stringify(history));
+            try {
+                // Limit history to last 10 items to save LocalStorage space
+                const limitedHistory = history.slice(0, 10);
+                localStorage.setItem("pano-history", JSON.stringify(limitedHistory));
+            } catch (e) {
+                console.warn("Storage quota exceeded, history not fully saved");
+                // If quota exceeded, try saving fewer items
+                try {
+                    localStorage.setItem("pano-history", JSON.stringify(history.slice(0, 3)));
+                } catch (innerError) {
+                    console.error("Critical storage failure:", innerError);
+                }
+            }
         }
     }, [history]);
 
