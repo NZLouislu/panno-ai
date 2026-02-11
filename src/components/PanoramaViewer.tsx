@@ -10,12 +10,7 @@ function SkyBox({ imageUrl }: { imageUrl: string }) {
     const [error, setError] = useState(false);
 
     useEffect(() => {
-        if (!imageUrl ||
-            imageUrl.includes("amazonaws.com") ||
-            imageUrl.includes("wikimedia.org") ||
-            imageUrl.includes("Mars_Rovers") ||
-            imageUrl.includes("711.jpg")
-        ) {
+        if (!imageUrl) {
             setError(true);
             return;
         }
@@ -23,17 +18,19 @@ function SkyBox({ imageUrl }: { imageUrl: string }) {
         const loader = new THREE.TextureLoader();
         loader.setCrossOrigin("anonymous");
 
+        console.log("Loading panorama texture:", imageUrl);
+
         loader.load(
             imageUrl,
             (tex) => {
-                tex.mapping = THREE.EquirectangularReflectionMapping;
                 tex.colorSpace = THREE.SRGBColorSpace;
                 setTexture(tex);
                 setError(false);
+                console.log("Texture loaded successfully");
             },
             undefined,
             (err) => {
-                console.warn("Manual texture load failed, falling back:", imageUrl, err);
+                console.error("Texture load error for:", imageUrl, err);
                 setError(true);
             }
         );
@@ -44,14 +41,14 @@ function SkyBox({ imageUrl }: { imageUrl: string }) {
     }, [imageUrl]);
 
     return (
-        <Sphere args={[500, 60, 40]} scale={[-1, 1, 1]}>
+        <Sphere args={[15, 64, 32]} scale={[-1, 1, 1]}>
             {texture && !error ? (
                 <meshBasicMaterial map={texture} side={THREE.BackSide} />
             ) : (
                 <meshStandardMaterial
-                    color="#0f172a"
+                    color="#1e293b" // Slate 800 - clearly not pitch black
                     side={THREE.BackSide}
-                    roughness={0.1}
+                    roughness={0.8}
                     metalness={0.2}
                 />
             )}
@@ -70,17 +67,20 @@ export default function PanoramaViewer({ imageUrl }: { imageUrl: string }) {
 
     return (
         <div className="w-full h-full rounded-2xl overflow-hidden glass border border-white/20">
-            <Canvas camera={{ position: [0, 0, 0.1] }}>
+            <Canvas camera={{ position: [0, 0, 0.1], fov: 75 }}>
                 <Suspense fallback={null}>
-                    <ambientLight intensity={0.5} />
-                    <pointLight position={[10, 10, 10]} />
+                    {/* Brighter lights for fallback material visibility */}
+                    <ambientLight intensity={1.5} />
+                    <pointLight position={[5, 5, 5]} intensity={2} />
                     <SkyBox imageUrl={imageUrl} />
                     <OrbitControls
                         enableZoom={true}
                         enablePan={false}
-                        rotateSpeed={-0.5}
-                        dampingFactor={0.05}
+                        rotateSpeed={-0.3}
+                        dampingFactor={0.1}
                         enableDamping={true}
+                        autoRotate={true}
+                        autoRotateSpeed={0.5}
                     />
                 </Suspense>
             </Canvas>

@@ -9,29 +9,29 @@ function getApiKeys() {
     ].filter(Boolean) as string[];
 }
 
-export async function getGeminiModel(index = 0) {
+export async function getGeminiModel(index = 0, modelName = "gemini-2.0-flash") {
     const keys = getApiKeys();
     if (index >= keys.length) {
         throw new Error("All Gemini API keys have been exhausted.");
     }
 
     const genAI = new GoogleGenerativeAI(keys[index]);
-    // Use gemini-2.0-flash as the "Gemini 3 flash" requested by user (likely 2.0)
-    return genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    return genAI.getGenerativeModel({ model: modelName });
 }
 
 export async function generateWithFallback(
     fn: (model: any) => Promise<any>,
-    index = 0
+    index = 0,
+    modelName = "gemini-2.0-flash"
 ): Promise<any> {
     const keys = getApiKeys();
     try {
-        const model = await getGeminiModel(index);
+        const model = await getGeminiModel(index, modelName);
         return await fn(model);
     } catch (error: any) {
-        console.warn(`API key ${index} failed, trying next...`, error.message);
+        console.warn(`API key ${index} for model ${modelName} failed, trying next...`, error.message);
         if (index + 1 < keys.length) {
-            return await generateWithFallback(fn, index + 1);
+            return await generateWithFallback(fn, index + 1, modelName);
         }
         throw error;
     }

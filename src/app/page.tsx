@@ -26,12 +26,13 @@ export default function Home() {
             try {
                 const parsed = JSON.parse(saved);
                 if (Array.isArray(parsed)) {
-                    // Filter out ALL old broken domains and specific failed files
+                    // Only keep local or known stable URLs
                     const filtered = parsed.filter(item =>
-                        !item.url?.includes("amazonaws.com") &&
-                        !item.url?.includes("wikimedia.org") &&
-                        !item.url?.includes("Mars_Rovers") &&
-                        !item.url?.includes("711.jpg")
+                        item.url && (
+                            item.url.startsWith("/") ||
+                            item.url.includes("threejs.org") ||
+                            item.url.includes("polyhaven.org")
+                        )
                     );
                     setHistory(filtered);
                     if (filtered.length > 0) setCurrentPano(filtered[0]);
@@ -67,7 +68,7 @@ export default function Home() {
 
             const newPano = {
                 id: Math.random().toString(36).substr(2, 9),
-                url: result.url || "https://threejs.org/examples/textures/uv_grid_opengl.jpg",
+                url: result.url || "https://dl.polyhaven.org/file/ph-assets/Environments/jpg/1k/kiara_interior_02.jpg",
                 prompt: prompt || "Generated from photos",
                 timestamp: new Date(),
             };
