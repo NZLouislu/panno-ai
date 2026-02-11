@@ -1,4 +1,6 @@
 import { POST } from '@/app/api/generate/route'
+import { exec } from 'child_process'
+import fs from 'fs'
 
 // Mock next/server
 jest.mock('next/server', () => ({
@@ -10,53 +12,97 @@ jest.mock('next/server', () => ({
     },
 }))
 
-// Mock Gemini
-jest.mock('@/lib/gemini', () => ({
-    generateWithFallback: jest.fn().mockResolvedValue({
-        url: 'https://r-interactive-media.s3.amazonaws.com/9/equirectangular.jpg',
-        success: true
-    }),
+// Mock child_process
+jest.mock('child_process', () => ({
+    exec: jest.fn(),
+}))
+
+// Mock fs and os
+jest.mock('fs', () => ({
+    existsSync: jest.fn().mockReturnValue(true),
+    mkdirSync: jest.fn(),
+    writeFileSync: jest.fn(),
+    unlinkSync: jest.fn(),
+    rmdirSync: jest.fn(),
+}))
+
+jest.mock('os', () => ({
+    tmpdir: () => '/tmp',
 }))
 
 const createMockRequest = (body: any) => ({
-    formData: async () => ({
-        get: (key: string) => body[key],
-        getAll: (key: string) => body[key] ? [body[key]] : [],
-    }),
+    formData: async () => {
+        const data = new Map();
+        Object.keys(body).forEach(key => {
+            if (Array.isArray(body[key])) {
+                data.set(key, body[key]);
+            } else {
+                data.set(key, body[key]);
+            }
+        });
+        return {
+            get: (key: string) => body[key],
+            getAll: (key: string) => Array.isArray(body[key]) ? body[key] : [body[key]],
+        };
+    },
 }) as any
 
-describe('Generate API', () => {
+describe('Generate API (Hybrid Pipeline)', () => {
     beforeEach(() => {
         jest.clearAllMocks()
-        // Suppress console.error for expected error tests
+        process.env.STABILITY_API_KEY = 'test-key'
         jest.spyOn(console, 'error').mockImplementation(() => { })
+        jest.spyOn(console, 'log').mockImplementation(() => { })
     })
 
-    afterEach(() => {
-        jest.restoreAllMocks()
-    })
+    it('returns success for valid request via hybrid pipeline', async () => {
+        const mockImage = new File(['test'], 'test.png', { type: 'image/png' })
+        const req = createMockRequest({
+            prompt: 'test prompt',
+            images: [mockImage]
+        })
 
-    it('returns success for valid request', async () => {
-        const req = createMockRequest({ prompt: 'test prompt' })
+        const mockStdout = JSON.stringify({
+            success: true,
+            image: 'data:image/png;base64,mockdata'
+        });
+
+        (exec as unknown as jest.Mock).mockImplementation((cmd, options, callback) => {
+            const cb = typeof options === 'function' ? options : callback;
+            process.nextTick(() => cb(null, mockStdout, ''));
+        })
 
         const response = await POST(req)
         const json = await response.json()
 
         expect(response.status).toBe(200)
         expect(json.success).toBe(true)
-        expect(json.url).toContain('equirectangular.jpg')
+        // Check if images were "saved" (our mock should have triggered fs.writeFileSync)
+        expect(fs.writeFileSync).toHaveBeenCalled()
+        expect(json.method).toBe('cv_ai_hybrid')
     })
 
-    it('returns 500 on failure', async () => {
-        const { generateWithFallback } = require('@/lib/gemini')
-        generateWithFallback.mockRejectedValueOnce(new Error('API Error'))
+    it('returns 500 on pipeline failure', async () => {
+        const mockImage = new File(['test'], 'test.png', { type: 'image/png' })
+        const req = createMockRequest({
+            prompt: 'fail',
+            images: [mockImage]
+        })
 
-        const req = createMockRequest({ prompt: 'fail' })
+        const mockError = JSON.stringify({
+            success: false,
+            error: 'AI Error'
+        });
+
+        (exec as unknown as jest.Mock).mockImplementation((cmd, options, callback) => {
+            const cb = typeof options === 'function' ? options : callback;
+            cb(null, mockError, '')
+        })
 
         const response = await POST(req)
         const json = await response.json()
 
         expect(response.status).toBe(500)
-        expect(json.error).toBe('API Error')
+        expect(json.message).toBe('AI Error')
     })
 })

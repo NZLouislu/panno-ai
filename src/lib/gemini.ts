@@ -2,10 +2,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 function getApiKeys() {
     return [
-        process.env.Gemini_API,
-        process.env.AULouis_Gemini_API,
-        process.env.Blog_Gemini_API,
-        process.env.Tasky_Gemini_API,
+        process.env.GEMINI_API_KEY,
+        process.env.GEMINI_API_KEY_SECONDARY,
     ].filter(Boolean) as string[];
 }
 

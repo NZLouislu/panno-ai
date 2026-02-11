@@ -43,37 +43,45 @@ describe('Home Page', () => {
     })
 
     it('generates panorama successfully', async () => {
-        render(<Home />)
+        // Mock fetch success
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+                success: true,
+                url: 'data:image/png;base64,mock',
+                method: 'cv_ai_hybrid'
+            })
+        });
 
+        render(<Home />)
         const generateBtn = screen.getByText('Generate')
 
         await act(async () => {
             fireEvent.click(generateBtn)
-            jest.advanceTimersByTime(3500)
         })
 
-        // Wait for update
         await waitFor(() => {
-            expect(screen.queryByText('Generating...')).not.toBeInTheDocument()
+            expect(screen.getByText('PanoramaViewer Mock')).toBeInTheDocument()
         })
 
-        expect(await screen.findByText('PanoramaViewer Mock')).toBeInTheDocument()
         expect(screen.getByText('1 Creations')).toBeInTheDocument()
     })
 
     it('loads history from localStorage', async () => {
         const mockHistory = [{
             id: 'test-id',
-            url: 'http://test.url/pano.jpg',
+            url: '/mock-local-url.jpg',
             prompt: 'test prompt',
             timestamp: new Date().toISOString()
         }]
-        localStorage.setItem('pano-history', JSON.stringify(mockHistory))
+
+        Storage.prototype.getItem = jest.fn(() => JSON.stringify(mockHistory));
 
         render(<Home />)
 
-        // We expect 1 creation immediately
-        expect(await screen.findByText('1 Creations')).toBeInTheDocument()
+        await waitFor(() => {
+            expect(screen.getByText('1 Creations')).toBeInTheDocument()
+        })
         expect(screen.getByText('PanoramaViewer Mock')).toBeInTheDocument()
     })
 })

@@ -62,22 +62,24 @@ export default function Home() {
                 body: formData,
             });
 
-            if (!response.ok) throw new Error("Failed to generate");
-
             const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                throw new Error(result.message || "Failed to generate panorama");
+            }
 
             const newPano = {
                 id: Math.random().toString(36).substr(2, 9),
-                url: result.url || "https://dl.polyhaven.org/file/ph-assets/Environments/jpg/1k/kiara_interior_02.jpg",
+                url: result.url,
                 prompt: prompt || "Generated from photos",
                 timestamp: new Date(),
             };
 
             setCurrentPano(newPano);
             setHistory(prev => [newPano, ...prev]);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Generate error:", error);
-            alert("Failed to generate panorama. Please try again.");
+            alert(`Generation Error: ${error.message}`);
         } finally {
             setIsGenerating(false);
         }

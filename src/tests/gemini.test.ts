@@ -6,10 +6,8 @@ jest.mock("@google/generative-ai");
 describe("Gemini API Fallback", () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        process.env.Gemini_API = "key1";
-        process.env.AULouis_Gemini_API = "key2";
-        process.env.Blog_Gemini_API = "";
-        process.env.Tasky_Gemini_API = "";
+        process.env.GEMINI_API_KEY = "key1";
+        process.env.GEMINI_API_KEY_SECONDARY = "key2";
 
         // Suppress console warnings in tests
         jest.spyOn(console, 'warn').mockImplementation(() => { });

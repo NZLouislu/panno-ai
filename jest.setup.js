@@ -37,3 +37,10 @@ jest.mock('framer-motion', () => ({
     },
     AnimatePresence: ({ children }) => <>{children}</>,
 }))
+// Mock global fetch
+global.fetch = jest.fn(() =>
+    Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, url: 'mock-url' }),
+    })
+);

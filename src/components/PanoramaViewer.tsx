@@ -1,89 +1,89 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Sphere } from "@react-three/drei";
-import * as THREE from "three";
-import { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from 'react';
 
-function SkyBox({ imageUrl }: { imageUrl: string }) {
-    const [texture, setTexture] = useState<THREE.Texture | null>(null);
-    const [error, setError] = useState(false);
+interface PanoramaViewerProps {
+    imageUrl: string;
+    className?: string;
+}
+
+declare global {
+    interface Window {
+        pannellum: any;
+    }
+}
+
+const PanoramaViewer: React.FC<PanoramaViewerProps> = ({ imageUrl, className }) => {
+    const viewerRef = useRef<HTMLDivElement>(null);
+    const pannellumInstance = useRef<any>(null);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        if (!imageUrl) {
-            setError(true);
-            return;
-        }
-
-        const loader = new THREE.TextureLoader();
-        loader.setCrossOrigin("anonymous");
-
-        console.log("Loading panorama texture:", imageUrl);
-
-        loader.load(
-            imageUrl,
-            (tex) => {
-                tex.colorSpace = THREE.SRGBColorSpace;
-                setTexture(tex);
-                setError(false);
-                console.log("Texture loaded successfully");
-            },
-            undefined,
-            (err) => {
-                console.error("Texture load error for:", imageUrl, err);
-                setError(true);
+        // Check if pannellum is loaded
+        const initViewer = () => {
+            if (!window.pannellum) {
+                console.warn("Pannellum not loaded yet, retrying...");
+                setTimeout(initViewer, 500);
+                return;
             }
-        );
+
+            if (viewerRef.current && imageUrl) {
+                // Destroy existing instance if it exists
+                if (pannellumInstance.current) {
+                    try {
+                        pannellumInstance.current.destroy();
+                    } catch (e) {
+                        console.warn("Error destroying pannellum instance:", e);
+                    }
+                }
+
+                try {
+                    // Initialize Pannellum
+                    pannellumInstance.current = window.pannellum.viewer(viewerRef.current, {
+                        type: 'equirectangular',
+                        panorama: imageUrl,
+                        autoLoad: true,
+                        showControls: true,
+                        compass: false, // Set to false by default for cleaner look
+                        mouseZoom: true,
+                        hfov: 100,
+                        vaov: 180,
+                        haov: 360,
+                        crossOrigin: "anonymous"
+                    });
+                    setError(null);
+                } catch (err: any) {
+                    console.error("Pannellum initialization error:", err);
+                    setError(err.message);
+                }
+            }
+        };
+
+        initViewer();
 
         return () => {
-            if (texture) texture.dispose();
+            if (pannellumInstance.current) {
+                try {
+                    pannellumInstance.current.destroy();
+                } catch (e) { }
+            }
         };
     }, [imageUrl]);
 
-    return (
-        <Sphere args={[15, 64, 32]} scale={[-1, 1, 1]}>
-            {texture && !error ? (
-                <meshBasicMaterial map={texture} side={THREE.BackSide} />
-            ) : (
-                <meshStandardMaterial
-                    color="#1e293b" // Slate 800 - clearly not pitch black
-                    side={THREE.BackSide}
-                    roughness={0.8}
-                    metalness={0.2}
-                />
-            )}
-        </Sphere>
-    );
-}
-
-export default function PanoramaViewer({ imageUrl }: { imageUrl: string }) {
-    const [mounted, setMounted] = useState(false);
-
-    useEffect(() => {
-        setMounted(true);
-    }, []);
-
-    if (!mounted) return <div className="w-full h-full bg-slate-900 animate-pulse" />;
+    if (error) {
+        return (
+            <div className="w-full h-full flex items-center justify-center bg-slate-900 text-red-400 p-4 text-center">
+                <p>Error loading viewer: {error}<br />Image might be too large or inaccessible.</p>
+            </div>
+        );
+    }
 
     return (
-        <div className="w-full h-full rounded-2xl overflow-hidden glass border border-white/20">
-            <Canvas camera={{ position: [0, 0, 0.1], fov: 75 }}>
-                <Suspense fallback={null}>
-                    {/* Brighter lights for fallback material visibility */}
-                    <ambientLight intensity={1.5} />
-                    <pointLight position={[5, 5, 5]} intensity={2} />
-                    <SkyBox imageUrl={imageUrl} />
-                    <OrbitControls
-                        enableZoom={true}
-                        enablePan={false}
-                        rotateSpeed={-0.3}
-                        dampingFactor={0.1}
-                        enableDamping={true}
-                        autoRotate={true}
-                        autoRotateSpeed={0.5}
-                    />
-                </Suspense>
-            </Canvas>
-        </div>
+        <div
+            ref={viewerRef}
+            className={`w-full h-full rounded-xl overflow-hidden shadow-2xl bg-black border border-slate-700 ${className || ''}`}
+        />
     );
-}
+};
+
+export default PanoramaViewer;
