@@ -26,47 +26,83 @@ export async function POST(req: NextRequest) {
             tempFiles.push(fileName);
         }
 
-        // 2. Load API Keys
+        // 2. Load Config & Keys
         const stabilityKeys = [
             process.env.STABILITY_API_KEY,
             process.env.NZ_STABILITY_API_KEY
         ].filter(Boolean) as string[];
 
-        // 3. Execution Logic: CV-Hybrid vs Pure-AI
-        const isVercel = process.env.VERCEL === "1";
+        const remoteWorkerUrl = process.env.REMOTE_WORKER_URL;
+        const remoteWorkerKey = process.env.REMOTE_WORKER_KEY;
+
         let result = null;
 
-        if (!isVercel) {
-            // --- LOCAL MODE: Use OpenCV + Python ---
+        // --- LEVEL 1: Remote Worker (Hugging Face Space) ---
+        if (remoteWorkerUrl) {
+            try {
+                console.log("Tier 1: Calling Remote Python Worker...");
+                const base64Images = tempFiles.map(f => fs.readFileSync(f).toString("base64"));
+
+                const response = await fetch(remoteWorkerUrl, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-API-Key": remoteWorkerKey || ""
+                    },
+                    body: JSON.stringify({
+                        prompt,
+                        images: base64Images,
+                        style: "photographic"
+                    }),
+                    signal: AbortSignal.timeout(90000) // Extended to 90s for high-quality stitching
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        result = { image: data.image, method: "remote_worker" };
+                        console.log("Remote worker success!");
+                    } else {
+                        console.warn("Remote worker internal error:", data.error);
+                    }
+                } else {
+                    const errText = await response.text();
+                    console.error("Remote worker HTTP error:", response.status, errText);
+                }
+            } catch (err: any) {
+                console.warn("Remote worker fallback...", err.message);
+            }
+        }
+
+        // --- LEVEL 2: Local Command Line (Skip on Vercel) ---
+        if (!result && process.env.VERCEL !== "1") {
             const pythonScript = path.join(process.cwd(), "scripts", "processor.py");
             const imageArgs = tempFiles.map(img => `"${img}"`).join(" ");
 
             for (let i = 0; i < stabilityKeys.length; i++) {
-                const currentKey = stabilityKeys[i];
                 try {
-                    const command = `python "${pythonScript}" "${currentKey}" "${prompt.replace(/"/g, '\\"')}" ${imageArgs}`;
-                    console.log(`Attempting hybrid pipeline with Stability Key ${i}...`);
-                    const { stdout } = await execAsync(command, { maxBuffer: 1024 * 1024 * 20 });
+                    console.log(`Tier 2: Attempting local pipeline with Key ${i}...`);
+                    const { stdout } = await execAsync(`python "${pythonScript}" "${stabilityKeys[i]}" "${prompt.replace(/"/g, '\\"')}" ${imageArgs}`, { maxBuffer: 1024 * 1024 * 20 });
                     const parsed = JSON.parse(stdout);
                     if (parsed.success) {
                         result = parsed;
                         break;
                     }
                 } catch (err: any) {
-                    console.warn(`Key ${i} CV failed, trying next...`, err.message);
+                    console.warn(`Local attempt failed:`, err.message);
                 }
             }
         }
 
-        // --- CLOUD FALLBACK: Pure AI Mode (If CV fails or is not available) ---
+        // --- LEVEL 3: Pure AI Cloud Fallback (Vision-Aware) ---
         if (!result) {
-            console.log("Using Vision-Enhanced AI cloud fallback...");
+            console.log("Tier 3: Using Vision-Enhanced AI cloud fallback...");
 
             if (stabilityKeys.length === 0) {
-                throw new Error("No Stability API keys found in environment variables. Please check Vercel settings.");
+                throw new Error("No Stability API keys found.");
             }
 
-            // --- Gemini Vision Analysis (Optional but recommended for context) ---
+            // Gemini Analysis
             let visionPrompt = prompt;
             const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
@@ -82,50 +118,35 @@ export async function POST(req: NextRequest) {
                     ]);
                     const description = visionResult.response.text();
                     visionPrompt = `${prompt}. Style: ${description}`;
-                    console.log("Gemini Vision Context:", description);
+                    console.log("Vision Context:", description);
                 } catch (e) {
-                    console.warn("Vision analysis failed, using text only.");
+                    console.warn("Vision analysis skipped.");
                 }
             }
 
-            for (let i = 0; i < stabilityKeys.length; i++) {
-                const key = stabilityKeys[i];
+            for (const key of stabilityKeys) {
                 try {
                     const aiFormData = new FormData();
-                    aiFormData.append("prompt", `${visionPrompt}, high quality 360 degree equirectangular panorama, VR ready, seamless horizon, professional photography`);
+                    aiFormData.append("prompt", `${visionPrompt}, high quality 360 degree equirectangular panorama, VR ready, seamless horizon`);
                     aiFormData.append("output_format", "webp");
                     aiFormData.append("aspect_ratio", "21:9");
 
                     const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/ultra", {
                         method: "POST",
-                        headers: {
-                            "Authorization": `Bearer ${key}`,
-                            "Accept": "application/json"
-                        },
+                        headers: { "Authorization": `Bearer ${key}`, "Accept": "application/json" },
                         body: aiFormData
                     });
 
                     const data = await response.json();
-
-                    if (!response.ok) {
-                        console.error(`Stability AI Key ${i} error:`, data.message || response.statusText);
-                        continue;
-                    }
-
-                    if (data.image) {
+                    if (response.ok && data.image) {
                         result = { image: `data:image/webp;base64,${data.image}`, method: "pure_ai" };
                         break;
                     }
-                } catch (e: any) {
-                    console.error(`AI Fallback Attempt ${i} failed:`, e.message);
-                    continue;
-                }
+                } catch (e: any) { continue; }
             }
         }
 
-        if (!result) {
-            throw new Error("Pipeline Exhausted: Both local CV stitching and cloud AI generation failed. Possible reasons: Invalid API Key or Out of Credits.");
-        }
+        if (!result) throw new Error("Pipeline Exhausted: All tiers failed.");
 
         return NextResponse.json({
             url: result.image,
