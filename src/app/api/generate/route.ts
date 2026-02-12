@@ -41,6 +41,10 @@ export async function POST(req: NextRequest) {
         if (remoteWorkerUrl) {
             try {
                 console.log("Tier 1: Calling Remote Python Worker...");
+                const isVercel = process.env.VERCEL === "1";
+                // Vercel Hobby has 10s limit, so Tier 1 should not exceed 8s
+                const timeout = isVercel ? 8000 : 60000;
+
                 const response = await fetch(remoteWorkerUrl, {
                     method: "POST",
                     headers: {
@@ -52,7 +56,7 @@ export async function POST(req: NextRequest) {
                         images: tempFiles.map(f => fs.readFileSync(f).toString("base64")),
                         style: "photographic"
                     }),
-                    signal: AbortSignal.timeout(60000)
+                    signal: AbortSignal.timeout(timeout)
                 });
 
                 if (response.ok) {
@@ -67,7 +71,7 @@ export async function POST(req: NextRequest) {
                     console.warn(`Tier 1 HTTP error: ${response.status}`);
                 }
             } catch (err: any) {
-                console.warn("Tier 1 Failed:", err.name === 'AbortError' ? "Vercel/Network Timeout" : err.message);
+                console.warn("Tier 1 Failed:", err.name === 'AbortError' ? "Timeout" : err.message);
             }
         }
 
@@ -92,6 +96,8 @@ export async function POST(req: NextRequest) {
             let visionPrompt = prompt;
             const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
+            // On Vercel, we might skip Gemini if we are low on time,
+            // but let's try to keep it for now and fix the Base64 typo
             if (geminiKey && tempFiles.length > 0) {
                 try {
                     const genAI = new GoogleGenerativeAI(geminiKey);
@@ -119,7 +125,7 @@ export async function POST(req: NextRequest) {
 
                     const data = await response.json();
                     if (response.ok && data.image) {
-                        result = { image: `data:image/webp;base66,${data.image}`, method: "pure_ai_ultra" };
+                        result = { image: `data:image/webp;base64,${data.image}`, method: "pure_ai_ultra" };
                         break;
                     } else {
                         console.error("Tier 3 API Error:", data.message || response.statusText);
