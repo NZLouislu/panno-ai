@@ -4,6 +4,7 @@ import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const execAsync = promisify(exec);
 
@@ -59,20 +60,41 @@ export async function POST(req: NextRequest) {
 
         // --- CLOUD FALLBACK: Pure AI Mode (If CV fails or is not available) ---
         if (!result) {
-            console.log("Using Pure-AI cloud fallback...");
+            console.log("Using Vision-Enhanced AI cloud fallback...");
 
             if (stabilityKeys.length === 0) {
                 throw new Error("No Stability API keys found in environment variables. Please check Vercel settings.");
             }
 
+            // --- Gemini Vision Analysis (Optional but recommended for context) ---
+            let visionPrompt = prompt;
+            const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+
+            if (geminiKey && tempFiles.length > 0) {
+                try {
+                    const genAI = new GoogleGenerativeAI(geminiKey);
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+                    const fileData = fs.readFileSync(tempFiles[0]);
+
+                    const visionResult = await model.generateContent([
+                        "Describe the visual style, lighting, and specific room type of this photo (e.g. modern bathroom, sunny living room) in 20 words for an AI image generator.",
+                        { inlineData: { data: fileData.toString("base64"), mimeType: "image/png" } }
+                    ]);
+                    const description = visionResult.response.text();
+                    visionPrompt = `${prompt}. Style: ${description}`;
+                    console.log("Gemini Vision Context:", description);
+                } catch (e) {
+                    console.warn("Vision analysis failed, using text only.");
+                }
+            }
+
             for (let i = 0; i < stabilityKeys.length; i++) {
                 const key = stabilityKeys[i];
                 try {
-                    // Use FormData for Stability AI v2beta compatibility
                     const aiFormData = new FormData();
-                    aiFormData.append("prompt", `${prompt}, high quality 360 degree equirectangular panorama, VR ready, seamless horizon`);
+                    aiFormData.append("prompt", `${visionPrompt}, high quality 360 degree equirectangular panorama, VR ready, seamless horizon, professional photography`);
                     aiFormData.append("output_format", "webp");
-                    aiFormData.append("aspect_ratio", "21:9"); // Closest to 2:1 pano
+                    aiFormData.append("aspect_ratio", "21:9");
 
                     const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/ultra", {
                         method: "POST",
