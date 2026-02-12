@@ -60,34 +60,50 @@ export async function POST(req: NextRequest) {
         // --- CLOUD FALLBACK: Pure AI Mode (If CV fails or is not available) ---
         if (!result) {
             console.log("Using Pure-AI cloud fallback...");
-            // If we are on Vercel or CV failed, use Stability AI directly via HTTP
-            // Using first image as reference if available
-            for (const key of stabilityKeys) {
+
+            if (stabilityKeys.length === 0) {
+                throw new Error("No Stability API keys found in environment variables. Please check Vercel settings.");
+            }
+
+            for (let i = 0; i < stabilityKeys.length; i++) {
+                const key = stabilityKeys[i];
                 try {
+                    // Use FormData for Stability AI v2beta compatibility
+                    const aiFormData = new FormData();
+                    aiFormData.append("prompt", `${prompt}, high quality 360 degree equirectangular panorama, VR ready, seamless horizon`);
+                    aiFormData.append("output_format", "webp");
+                    aiFormData.append("aspect_ratio", "21:9"); // Closest to 2:1 pano
+
                     const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/ultra", {
                         method: "POST",
                         headers: {
                             "Authorization": `Bearer ${key}`,
-                            "Accept": "application/json",
-                            "Content-Type": "application/json"
+                            "Accept": "application/json"
                         },
-                        body: JSON.stringify({
-                            prompt: `${prompt}, 360 degree equirectangular panorama, VR head-set ready, seamless`,
-                            output_format: "webp",
-                            aspect_ratio: "21:9" // Closest to 2:1
-                        })
+                        body: aiFormData
                     });
 
                     const data = await response.json();
-                    if (response.ok && data.image) {
+
+                    if (!response.ok) {
+                        console.error(`Stability AI Key ${i} error:`, data.message || response.statusText);
+                        continue;
+                    }
+
+                    if (data.image) {
                         result = { image: `data:image/webp;base64,${data.image}`, method: "pure_ai" };
                         break;
                     }
-                } catch (e) { continue; }
+                } catch (e: any) {
+                    console.error(`AI Fallback Attempt ${i} failed:`, e.message);
+                    continue;
+                }
             }
         }
 
-        if (!result) throw new Error("All processing attempts (CV & AI) failed.");
+        if (!result) {
+            throw new Error("Pipeline Exhausted: Both local CV stitching and cloud AI generation failed. Possible reasons: Invalid API Key or Out of Credits.");
+        }
 
         return NextResponse.json({
             url: result.image,
