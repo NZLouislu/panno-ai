@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
 
         // 2. Initial Validation
         const stabilityKeys = [
+            process.env.Home_STABILITY_API_KEY, // Priority 1: New Account
             process.env.STABILITY_API_KEY,
             process.env.NZ_STABILITY_API_KEY
         ].filter(Boolean) as string[];
