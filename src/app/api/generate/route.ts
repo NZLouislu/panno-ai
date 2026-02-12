@@ -41,8 +41,6 @@ export async function POST(req: NextRequest) {
         if (remoteWorkerUrl) {
             try {
                 console.log("Tier 1: Calling Remote Python Worker...");
-                const base64Images = tempFiles.map(f => fs.readFileSync(f).toString("base64"));
-
                 const response = await fetch(remoteWorkerUrl, {
                     method: "POST",
                     headers: {
@@ -51,58 +49,46 @@ export async function POST(req: NextRequest) {
                     },
                     body: JSON.stringify({
                         prompt,
-                        images: base64Images,
+                        images: tempFiles.map(f => fs.readFileSync(f).toString("base64")),
                         style: "photographic"
                     }),
-                    signal: AbortSignal.timeout(90000) // Extended to 90s for high-quality stitching
+                    signal: AbortSignal.timeout(60000)
                 });
 
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success) {
                         result = { image: data.image, method: "remote_worker" };
-                        console.log("Remote worker success!");
+                        console.log("Tier 1 SUCCESS");
                     } else {
-                        console.warn("Remote worker internal error:", data.error);
+                        console.warn("Tier 1 logic error:", data.error);
                     }
                 } else {
-                    const errText = await response.text();
-                    console.error("Remote worker HTTP error:", response.status, errText);
+                    console.warn(`Tier 1 HTTP error: ${response.status}`);
                 }
             } catch (err: any) {
-                console.warn("Remote worker fallback...", err.message);
+                console.warn("Tier 1 Failed:", err.name === 'AbortError' ? "Vercel/Network Timeout" : err.message);
             }
         }
 
         // --- LEVEL 2: Local Command Line (Skip on Vercel) ---
         if (!result && process.env.VERCEL !== "1") {
-            const pythonScript = path.join(process.cwd(), "scripts", "processor.py");
-            const imageArgs = tempFiles.map(img => `"${img}"`).join(" ");
-
-            for (let i = 0; i < stabilityKeys.length; i++) {
-                try {
-                    console.log(`Tier 2: Attempting local pipeline with Key ${i}...`);
-                    const { stdout } = await execAsync(`python "${pythonScript}" "${stabilityKeys[i]}" "${prompt.replace(/"/g, '\\"')}" ${imageArgs}`, { maxBuffer: 1024 * 1024 * 20 });
-                    const parsed = JSON.parse(stdout);
-                    if (parsed.success) {
-                        result = parsed;
-                        break;
-                    }
-                } catch (err: any) {
-                    console.warn(`Local attempt failed:`, err.message);
-                }
+            try {
+                const pythonScript = path.join(process.cwd(), "scripts", "processor.py");
+                const imageArgs = tempFiles.map(img => `"${img}"`).join(" ");
+                console.log("Tier 2: Local Execution...");
+                const { stdout } = await execAsync(`python "${pythonScript}" "${stabilityKeys[0]}" "${prompt.replace(/"/g, '\\"')}" ${imageArgs}`, { maxBuffer: 1024 * 1024 * 20 });
+                const parsed = JSON.parse(stdout);
+                if (parsed.success) result = parsed;
+            } catch (err: any) {
+                console.warn("Tier 2 Failed:", err.message);
             }
         }
 
         // --- LEVEL 3: Pure AI Cloud Fallback (Vision-Aware) ---
         if (!result) {
-            console.log("Tier 3: Using Vision-Enhanced AI cloud fallback...");
+            console.log("Tier 3: Starting Vision-Enhanced AI fallback...");
 
-            if (stabilityKeys.length === 0) {
-                throw new Error("No Stability API keys found.");
-            }
-
-            // Gemini Analysis
             let visionPrompt = prompt;
             const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
@@ -110,51 +96,41 @@ export async function POST(req: NextRequest) {
                 try {
                     const genAI = new GoogleGenerativeAI(geminiKey);
                     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-                    const fileData = fs.readFileSync(tempFiles[0]);
-
                     const visionResult = await model.generateContent([
-                        "Describe the visual style, lighting, and specific room type of this photo (e.g. modern bathroom, sunny living room) in 20 words for an AI image generator.",
-                        { inlineData: { data: fileData.toString("base64"), mimeType: "image/png" } }
+                        "Describe room type and furniture in 15 words.",
+                        { inlineData: { data: fs.readFileSync(tempFiles[0]).toString("base64"), mimeType: "image/png" } }
                     ]);
-                    const description = visionResult.response.text();
-                    visionPrompt = `${prompt}. Style: ${description}`;
-                    console.log("Vision Context:", description);
-                } catch (e) {
-                    console.warn("Vision analysis skipped.");
-                }
+                    visionPrompt = `${prompt}. Style: ${visionResult.response.text()}`;
+                } catch (e) { }
             }
 
             for (const key of stabilityKeys) {
                 try {
-                    // Use Image-to-Image for better fidelity to user's photos
                     const aiFormData = new FormData();
-                    aiFormData.append("init_image", new Blob([fs.readFileSync(tempFiles[0])], { type: "image/png" }));
-                    aiFormData.append("image_strength", "0.35"); // Balance between original photo and AI generation
-                    aiFormData.append("init_image_mode", "IMAGE_STRENGTH");
-                    aiFormData.append("text_prompts[0][text]", `${visionPrompt}, 360 degree equirectangular panorama, professional wide angle photography, seamless horizon`);
-                    aiFormData.append("text_prompts[0][weight]", "1");
-                    aiFormData.append("cfg_scale", "7");
-                    aiFormData.append("samples", "1");
-                    aiFormData.append("steps", "30");
+                    aiFormData.append("prompt", `${visionPrompt}, 360 panorama, wide angle, high quality, seamless`);
+                    aiFormData.append("output_format", "webp");
+                    aiFormData.append("aspect_ratio", "21:9");
 
-                    const response = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/image-to-image", {
+                    const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/ultra", {
                         method: "POST",
                         headers: { "Authorization": `Bearer ${key}`, "Accept": "application/json" },
                         body: aiFormData
                     });
 
                     const data = await response.json();
-                    if (response.ok && data.artifacts && data.artifacts[0]) {
-                        result = { image: `data:image/png;base64,${data.artifacts[0].base64}`, method: "pure_ai_img2img" };
+                    if (response.ok && data.image) {
+                        result = { image: `data:image/webp;base66,${data.image}`, method: "pure_ai_ultra" };
                         break;
                     } else {
-                        console.error("Stability Img2Img Error:", data.message);
+                        console.error("Tier 3 API Error:", data.message || response.statusText);
                     }
-                } catch (e: any) { continue; }
+                } catch (e: any) {
+                    console.error("Tier 3 Request Error:", e.message);
+                }
             }
         }
 
-        if (!result) throw new Error("Pipeline Exhausted: All tiers failed.");
+        if (!result) throw new Error("Pipeline Exhausted: All tiers failed. Possible timeout or quota issue.");
 
         return NextResponse.json({
             url: result.image,
