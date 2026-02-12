@@ -26,24 +26,28 @@ export async function POST(req: NextRequest) {
             tempFiles.push(fileName);
         }
 
-        // 2. Load Config & Keys
+        // 2. Initial Validation
         const stabilityKeys = [
             process.env.STABILITY_API_KEY,
             process.env.NZ_STABILITY_API_KEY
         ].filter(Boolean) as string[];
 
+        if (stabilityKeys.length === 0) {
+            throw new Error("Missing STABILITY_API_KEY in Environment Variables.");
+        }
+
         const remoteWorkerUrl = process.env.REMOTE_WORKER_URL;
         const remoteWorkerKey = process.env.REMOTE_WORKER_KEY;
 
         let result = null;
+        const isVercel = process.env.VERCEL === "1";
 
-        // --- LEVEL 1: Remote Worker (Hugging Face Space) ---
+        // --- LEVEL 1: Remote Worker (HF) ---
         if (remoteWorkerUrl) {
             try {
                 console.log("Tier 1: Calling Remote Python Worker...");
-                const isVercel = process.env.VERCEL === "1";
-                // Vercel Hobby has 10s limit, so Tier 1 should not exceed 8s
-                const timeout = isVercel ? 8000 : 60000;
+                // On Vercel Hobby, we must bail early if HF is slow to allow Fallback to run
+                const timeout = isVercel ? 7000 : 60000;
 
                 const response = await fetch(remoteWorkerUrl, {
                     method: "POST",
@@ -65,18 +69,18 @@ export async function POST(req: NextRequest) {
                         result = { image: data.image, method: "remote_worker" };
                         console.log("Tier 1 SUCCESS");
                     } else {
-                        console.warn("Tier 1 logic error:", data.error);
+                        console.warn("Tier 1 Worker Error:", data.error);
                     }
                 } else {
-                    console.warn(`Tier 1 HTTP error: ${response.status}`);
+                    console.warn(`Tier 1 HTTP ${response.status}`);
                 }
             } catch (err: any) {
-                console.warn("Tier 1 Failed:", err.name === 'AbortError' ? "Timeout" : err.message);
+                console.warn("Tier 1 Skipped:", err.name === 'AbortError' ? "Timeout (HF too slow)" : err.message);
             }
         }
 
-        // --- LEVEL 2: Local Command Line (Skip on Vercel) ---
-        if (!result && process.env.VERCEL !== "1") {
+        // --- LEVEL 2: Local Command Line (Only if NOT on Vercel) ---
+        if (!result && !isVercel) {
             try {
                 const pythonScript = path.join(process.cwd(), "scripts", "processor.py");
                 const imageArgs = tempFiles.map(img => `"${img}"`).join(" ");
@@ -89,21 +93,20 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        // --- LEVEL 3: Pure AI Cloud Fallback (Vision-Aware) ---
+        // --- LEVEL 3: Pure AI Cloud Fallback ---
         if (!result) {
-            console.log("Tier 3: Starting Vision-Enhanced AI fallback...");
+            console.log("Tier 3: Starting Pure AI Fallback...");
 
             let visionPrompt = prompt;
             const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
-            // On Vercel, we might skip Gemini if we are low on time,
-            // but let's try to keep it for now and fix the Base64 typo
+            // On Vercel, only do Gemini if we have enough time left
             if (geminiKey && tempFiles.length > 0) {
                 try {
                     const genAI = new GoogleGenerativeAI(geminiKey);
                     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                     const visionResult = await model.generateContent([
-                        "Describe room type and furniture in 15 words.",
+                        "Describe room type and style in 10 words.",
                         { inlineData: { data: fs.readFileSync(tempFiles[0]).toString("base64"), mimeType: "image/png" } }
                     ]);
                     visionPrompt = `${prompt}. Style: ${visionResult.response.text()}`;
@@ -128,7 +131,7 @@ export async function POST(req: NextRequest) {
                         result = { image: `data:image/webp;base64,${data.image}`, method: "pure_ai_ultra" };
                         break;
                     } else {
-                        console.error("Tier 3 API Error:", data.message || response.statusText);
+                        console.error("Stability API Error:", data.message || response.statusText);
                     }
                 } catch (e: any) {
                     console.error("Tier 3 Request Error:", e.message);
@@ -136,7 +139,7 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        if (!result) throw new Error("Pipeline Exhausted: All tiers failed. Possible timeout or quota issue.");
+        if (!result) throw new Error("All generation methods failed. Check STABILITY_API_KEY credits or connection.");
 
         return NextResponse.json({
             url: result.image,
