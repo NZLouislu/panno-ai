@@ -33,29 +33,27 @@ class PanoEngine:
                 # 如果拼接失败，回退到第一张图
                 pano = imgs[0]
 
-        # 强制调整为 2:1 比例用于 360 度显示 (Equirectangular)
-        h, w = pano.shape[:2]
-        target_w = w
-        target_h = int(w / 2)
+        # Prepare canvas with strictly 2:1 ratio
+        canvas_w = w
+        canvas_h = int(w / 2)
         
-        # 创建画布，居中填充
-        canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-        y_offset = (target_h - h) // 2
+        canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
         
-        # 将拼接后的图放入 2:1 画布中央
-        if y_offset >= 0:
-            canvas[y_offset:y_offset+h, 0:w] = pano
+        if h > canvas_h:
+            # Prevent vertical stretching: Crop center height
+            start_y = (h - canvas_h) // 2
+            stitched_crop = pano[start_y:start_y+canvas_h, :]
+            canvas = stitched_crop
         else:
-            # 如果拼接出来的图特别高，进行截取
-            canvas[0:target_h, 0:w] = pano[-y_offset:-y_offset+target_h, :]
+            # Fill gaps: Center vertically
+            y_offset = (canvas_h - h) // 2
+            canvas[y_offset:y_offset+h, 0:w] = pano
 
-        # 生成 Mask (黑色区域为 0,0,0)
-        gray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY_INV)
-        
-        # 膨胀掩码以防止接缝黑线
-        kernel = np.ones((15, 15), np.uint8)
-        mask = cv2.dilate(mask, kernel, iterations=1)
+        # Create specialized mask for ceiling/floor inpainting
+        mask = np.ones((canvas_h, canvas_w), dtype=np.uint8) * 255
+        actual_h = min(h, canvas_h)
+        actual_y = (canvas_h - actual_h) // 2
+        mask[actual_y:actual_y+actual_h, 0:w] = 0
         
         return canvas, mask
 
