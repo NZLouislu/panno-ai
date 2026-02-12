@@ -38,6 +38,10 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < stabilityKeys.length; i++) {
             const currentKey = stabilityKeys[i];
             try {
+                // Vercel serverless doesn't have OpenCV/Python built-in easily
+                if (process.env.VERCEL === "1") {
+                    throw new Error("CV-Hybrid Pipeline is only supported in local/server environments with Python & OpenCV installed. For Vercel, please use a remote worker or Pure-AI mode.");
+                }
                 const command = `python "${pythonScript}" "${currentKey}" "${prompt.replace(/"/g, '\\"')}" ${imageArgs}`;
                 console.log(`Attempting hybrid pipeline with Stability Key ${i}...`);
 
